@@ -253,7 +253,21 @@ impl ToolRouter {
                 call_id,
                 ..
             } => {
-                let tool_name = ToolName::new(namespace, name).with_default_namespace();
+                // When the wire does not carry an explicit namespace, a namespaced tool
+                // may arrive as a flat dotted name (e.g. "multi_agent_v1.spawn_agent").
+                // Split it at the first dot into (namespace, name) so the registry lookup
+                // matches the handler key registered under ToolName::namespaced.
+                let (ns, tool) = match namespace {
+                    Some(ref n) if !n.is_empty() => (Some(n.clone()), name),
+                    _ => match name.split_once('.') {
+                        Some((n, t)) if !n.is_empty() && !t.is_empty() => (
+                            Some(n.to_string()),
+                            t.to_string(),
+                        ),
+                        _ => (namespace, name),
+                    },
+                };
+                let tool_name = ToolName::new(ns, tool).with_default_namespace();
                 Ok(Some(ToolCall {
                     tool_name,
                     call_id,
