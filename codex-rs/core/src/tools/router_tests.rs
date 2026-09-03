@@ -305,6 +305,71 @@ fn build_tool_call_normalizes_default_function_and_custom_namespaces() -> anyhow
     Ok(())
 }
 
+#[test]
+fn build_tool_call_splits_flat_dotted_name_when_namespace_is_absent() -> anyhow::Result<()> {
+    // Regression: the Responses wire back-parses a namespaced tool call as a flat
+    // dotted name (e.g. "multi_agent_v1.spawn_agent") with `namespace: None`. The
+    // router must split it at the first dot into (namespace, name) so the registry
+    // lookup matches the handler key registered under ToolName::namespaced.
+    let call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
+        id: None,
+        name: "multi_agent_v1.spawn_agent".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        encrypted_function_args: None,
+        call_id: "call-flat-dotted".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    })?
+    .expect("function_call should produce a tool call");
+
+    assert_eq!(
+        call.tool_name,
+        ToolName::namespaced("multi_agent_v1", "spawn_agent"),
+        "flat dotted name must resolve to the registered (namespace, name) key"
+    );
+    assert_eq!(call.call_id, "call-flat-dotted");
+    match call.payload {
+        ToolPayload::Function { arguments } => assert_eq!(arguments, "{}"),
+        other => panic!("expected function payload, got {other:?}"),
+    }
+
+    // A plain (non-dotted) name with no namespace still lands in the default namespace.
+    let plain = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
+        id: None,
+        name: "write_file".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        encrypted_function_args: None,
+        call_id: "call-plain".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    })?
+    .expect("function_call should produce a tool call");
+    assert_eq!(
+        plain.tool_name,
+        ToolName::namespaced(DEFAULT_FUNCTION_NAMESPACE, "write_file"),
+        "plain names must keep the default namespace"
+    );
+
+    // An explicit namespace wins over any dotted name (existing behavior preserved).
+    let explicit = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
+        id: None,
+        name: "spawn_agent".to_string(),
+        namespace: Some("collaboration".to_string()),
+        arguments: "{}".to_string(),
+        encrypted_function_args: None,
+        call_id: "call-explicit".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    })?
+    .expect("function_call should produce a tool call");
+    assert_eq!(
+        explicit.tool_name,
+        ToolName::namespaced("collaboration", "spawn_agent"),
+        "explicit namespace must not be altered"
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
