@@ -113,6 +113,7 @@ pub(crate) struct ThreadState {
     current_turn_history: ThreadHistoryBuilder,
     listener_thread: Option<Weak<CodexThread>>,
     watch_registration: WatchRegistration,
+    pub(crate) title_generation_attempted: bool,
 }
 
 impl ThreadState {

@@ -190,6 +190,22 @@ pub(crate) async fn apply_bespoke_event_handling(
             thread_watch_manager
                 .note_turn_completed(&conversation_id.to_string(), turn_failed)
                 .await;
+            // Auto-generate thread title on first completed turn
+            if !turn_failed {
+                let should_generate = {
+                    let state = thread_state.lock().await;
+                    !state.title_generation_attempted
+                };
+                if should_generate {
+                    thread_state.lock().await.title_generation_attempted = true;
+                    crate::thread_title::spawn_thread_title_generation(
+                        conversation_id,
+                        conversation.clone(),
+                        thread_manager.clone(),
+                        outgoing.clone(),
+                    );
+                }
+            }
             handle_turn_complete(
                 conversation_id,
                 event_turn_id,
