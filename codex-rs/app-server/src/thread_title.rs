@@ -169,7 +169,7 @@ async fn generate_and_apply_title(
         return Ok(());
     }
 
-    let _permit = thread_list_state_permit()
+    let _permit = thread_list_state_permit().clone()
         .acquire_owned()
         .await
         .map_err(|e| {
