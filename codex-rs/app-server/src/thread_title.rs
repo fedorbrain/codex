@@ -91,7 +91,10 @@ async fn generate_and_apply_title(
 
     let mut config = (*conversation.config().await).clone();
     config.ephemeral = true;
-    config.model = Some("qwen38-fast".to_string());
+    // Generate the title with the thread's own provider and model. A hardcoded alias here
+    // breaks whenever the configured provider no longer serves that alias (for example an
+    // Ollama-only alias while the active provider is a local server), and the title then
+    // silently never appears.
 
     let new_thread = thread_manager
         .start_thread(StartThreadOptions::new(config))

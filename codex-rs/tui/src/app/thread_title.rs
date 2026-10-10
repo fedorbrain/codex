@@ -411,25 +411,13 @@ Recent conversation messages:\n"
 
 /// Normalize a generated title and truncate it without splitting Unicode characters.
 pub(super) fn parse_thread_title(response: &str) -> Option<String> {
-    let trimmed = response.trim();
-
-    if trimmed.is_empty()
-        || trimmed == "null"
-        || trimmed == "true"
-        || trimmed == "false"
-        || trimmed.chars().all(|c| c.is_ascii_digit())
-        || trimmed.starts_with('[')
-    {
+    if !response.trim_start().starts_with('{') {
         return None;
     }
 
-    let title = if trimmed.starts_with('{') {
-        serde_json::from_str::<GeneratedThreadTitle>(trimmed)
-            .ok()?
-            .title
-    } else {
-        trimmed.to_string()
-    };
+    let title = serde_json::from_str::<GeneratedThreadTitle>(response)
+        .ok()?
+        .title;
 
     let normalized = title
         .trim()
