@@ -33,6 +33,27 @@ use tracing::instrument;
 
 pub use crate::tools::context::ToolCallSource;
 
+/// Legacy model-visible prefix for MCP tool namespaces.
+const LEGACY_MCP_NAMESPACE_PREFIX: &str = "mcp__";
+
+/// Returns the registered identity for a model-emitted namespace that carries the
+/// legacy `mcp__` prefix on a built-in namespace, such as
+/// `mcp__multi_agent_v1.spawn_agent` for the tool registered as `multi_agent_v1.spawn_agent`.
+/// Returns `None` when there is nothing to strip so the emitted identity stays in force.
+fn legacy_mcp_namespace_alias(tool_name: &ToolName) -> Option<ToolName> {
+    let namespace = tool_name
+        .namespace
+        .as_deref()?
+        .strip_prefix(LEGACY_MCP_NAMESPACE_PREFIX)?;
+    if namespace.is_empty() {
+        return None;
+    }
+    Some(ToolName::namespaced(
+        namespace.to_string(),
+        tool_name.name.clone(),
+    ))
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolCall {
     pub tool_name: ToolName,
@@ -375,6 +396,17 @@ impl ToolRouter {
             payload,
             ..
         } = call;
+
+        // A model can address a built-in tool as if its namespace were an MCP server and emit
+        // `mcp__<namespace>.<name>`. Resolve that alias before dispatch so handlers, hooks, and
+        // telemetry observe the identity the tool is registered under.
+        let tool_name = if self.tool_runtime(&tool_name).is_some() {
+            tool_name
+        } else {
+            legacy_mcp_namespace_alias(&tool_name)
+                .filter(|alias| self.tool_runtime(alias).is_some())
+                .unwrap_or(tool_name)
+        };
 
         // Keep the legacy ToolInvocation.turn field tied to the same request state until handlers migrate.
         let turn = Arc::clone(&step_context.turn);
