@@ -646,15 +646,12 @@ debug = "none"
 strip = "symbols"
 
 [profile.release]
+debug = false
+strip = true
 lto = "thin"
-debug = "line-tables-only"
+codegen-units = 1
+panic = "abort"
 split-debuginfo = "off"
-# Keep release binaries symbolicateable until packaging has archived the
-# sidecar symbols and stripped the binaries.
-strip = false
-
-# Balance parallel release code generation against binary size.
-codegen-units = 4
 
 [profile.profiling]
 inherits = "release"

@@ -134,6 +134,7 @@ pub(crate) struct ThreadState {
     history_mode: ThreadHistoryMode,
     listener_thread: Option<Weak<CodexThread>>,
     watch_registration: WatchRegistration,
+    pub(crate) title_generation_attempted: bool,
 }
 
 impl ThreadState {

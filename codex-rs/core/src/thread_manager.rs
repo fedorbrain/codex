@@ -1807,6 +1807,14 @@ impl ThreadManager {
             })
             .unwrap_or_default()
     }
+
+    /// Read a stored thread from the thread store, including cold (unloaded) threads.
+    pub async fn read_stored_thread(
+        &self,
+        params: ReadThreadParams,
+    ) -> CodexResult<StoredThread> {
+        self.state.read_stored_thread(params).await
+    }
 }
 
 impl ThreadManagerState {
@@ -1864,7 +1872,7 @@ impl ThreadManagerState {
         }
     }
 
-    pub(crate) async fn read_stored_thread(
+    pub async fn read_stored_thread(
         &self,
         params: ReadThreadParams,
     ) -> CodexResult<StoredThread> {

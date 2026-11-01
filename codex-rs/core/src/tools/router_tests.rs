@@ -4,6 +4,7 @@ use std::sync::Arc;
 use crate::config::Config;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
+use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::McpHandler;
 use crate::tools::registry::CoreToolRuntime;
@@ -307,6 +308,71 @@ fn build_tool_call_normalizes_default_function_and_custom_namespaces() -> anyhow
             ]
         );
     }
+
+    Ok(())
+}
+
+#[test]
+fn build_tool_call_splits_flat_dotted_name_when_namespace_is_absent() -> anyhow::Result<()> {
+    // Regression: the Responses wire back-parses a namespaced tool call as a flat
+    // dotted name (e.g. "multi_agent_v1.spawn_agent") with `namespace: None`. The
+    // router must split it at the first dot into (namespace, name) so the registry
+    // lookup matches the handler key registered under ToolName::namespaced.
+    let call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
+        id: None,
+        name: "multi_agent_v1.spawn_agent".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        encrypted_function_args: None,
+        call_id: "call-flat-dotted".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    })?
+    .expect("function_call should produce a tool call");
+
+    assert_eq!(
+        call.tool_name,
+        ToolName::namespaced("multi_agent_v1", "spawn_agent"),
+        "flat dotted name must resolve to the registered (namespace, name) key"
+    );
+    assert_eq!(call.call_id, "call-flat-dotted");
+    match call.payload {
+        ToolPayload::Function { arguments } => assert_eq!(arguments, "{}"),
+        other => panic!("expected function payload, got {other:?}"),
+    }
+
+    // A plain (non-dotted) name with no namespace still lands in the default namespace.
+    let plain = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
+        id: None,
+        name: "write_file".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        encrypted_function_args: None,
+        call_id: "call-plain".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    })?
+    .expect("function_call should produce a tool call");
+    assert_eq!(
+        plain.tool_name,
+        ToolName::namespaced(DEFAULT_FUNCTION_NAMESPACE, "write_file"),
+        "plain names must keep the default namespace"
+    );
+
+    // An explicit namespace wins over any dotted name (existing behavior preserved).
+    let explicit = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
+        id: None,
+        name: "spawn_agent".to_string(),
+        namespace: Some("collaboration".to_string()),
+        arguments: "{}".to_string(),
+        encrypted_function_args: None,
+        call_id: "call-explicit".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    })?
+    .expect("function_call should produce a tool call");
+    assert_eq!(
+        explicit.tool_name,
+        ToolName::namespaced("collaboration", "spawn_agent"),
+        "explicit namespace must not be altered"
+    );
 
     Ok(())
 }
@@ -634,6 +700,174 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
         }
         other => panic!("expected function call output, got {other:?}"),
     }
+
+    Ok(())
+}
+
+/// Handler that reports the identity it was invoked under, so tests can assert on the
+/// resolved `(namespace, name)` instead of only on dispatch success.
+struct NamespaceAliasProbeHandler;
+
+impl codex_tools::ToolExecutor<ToolInvocation> for NamespaceAliasProbeHandler {
+    fn tool_name(&self) -> ToolName {
+        ToolName::namespaced(PROBE_NAMESPACE, PROBE_TOOL)
+    }
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::Namespace(codex_tools::ResponsesApiNamespace {
+            name: PROBE_NAMESPACE.to_string(),
+            description: "Test probe namespace.".to_string(),
+            tools: vec![codex_tools::ResponsesApiNamespaceTool::Function(
+                codex_tools::ResponsesApiTool {
+                    name: PROBE_TOOL.to_string(),
+                    description: "Test probe tool.".to_string(),
+                    strict: false,
+                    defer_loading: None,
+                    parameters: codex_tools::JsonSchema::default(),
+                    output_schema: None,
+                },
+            )],
+        })
+    }
+
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
+    where
+        ToolInvocation: 'a,
+    {
+        let identity = format!(
+            "{}|{}",
+            invocation.tool_name.namespace.as_deref().unwrap_or("-"),
+            invocation.tool_name.name
+        );
+        Box::pin(async move {
+            Ok(
+                Box::new(crate::tools::context::FunctionToolOutput::from_text(identity, Some(true)))
+                    as Box<dyn crate::tools::context::ToolOutput>,
+            )
+        })
+    }
+}
+
+impl CoreToolRuntime for NamespaceAliasProbeHandler {}
+
+const LEGACY_PREFIX: &str = "mcp__";
+const PROBE_NAMESPACE: &str = "probe_namespace";
+const PROBE_TOOL: &str = "probe_tool";
+
+#[tokio::test]
+async fn dispatch_resolves_legacy_mcp_prefixed_builtin_namespace() -> anyhow::Result<()> {
+    // Regression: a local model addressed a built-in tool as if its namespace were an MCP
+    // server, so the wire carried the flat dotted name "mcp__multi_agent_v1.spawn_agent"
+    // with `namespace: None`. The flat-dotted split yields an identity that is not
+    // registered, and the call used to fail with
+    // "unsupported call: mcp__multi_agent_v1spawn_agent".
+    let (session, turn) = make_session_and_context().await;
+    let turn = Arc::new(turn);
+    let step_context = StepContext::for_test(Arc::clone(&turn));
+    let probe = Arc::new(NamespaceAliasProbeHandler) as Arc<dyn CoreToolRuntime>;
+    let router = test_tool_router(
+        step_context.as_ref(),
+        vec![RegisteredTool {
+            exposure: probe.exposure(),
+            runtime: Arc::clone(&probe),
+        }],
+        Vec::new(),
+        &turn.dynamic_tools,
+    );
+
+    assert_eq!(
+        router
+            .tool_runtime(&ToolName::namespaced(
+                "mcp__probe_namespace",
+                "probe_tool"
+            ))
+            .map(|runtime| runtime.tool_name()),
+        None,
+        "the model-emitted identity must not resolve on its own"
+    );
+
+    let call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
+        id: None,
+        name: format!("{LEGACY_PREFIX}{PROBE_NAMESPACE}.{PROBE_TOOL}"),
+        namespace: None,
+        arguments: "{}".to_string(),
+        encrypted_function_args: None,
+        call_id: "call-mcp-prefixed-probe".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    })?
+    .expect("function_call should produce a tool call");
+    assert_eq!(
+        call.tool_name,
+        ToolName::namespaced("mcp__probe_namespace", PROBE_TOOL),
+        "flat dotted name must split at the first dot before the alias is applied"
+    );
+
+    let result = router
+        .dispatch_tool_call_with_code_mode_result(
+            Arc::new(session),
+            step_context,
+            CancellationToken::new(),
+            Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+            call,
+            ToolCallSource::Direct,
+        )
+        .await?;
+
+    let response = result.into_response().item;
+    let ResponseItem::FunctionCallOutput { output, .. } = response else {
+        panic!("expected function call output, got {response:?}")
+    };
+    let FunctionCallOutputBody::Text(text) = output.body else {
+        panic!("expected text function call output");
+    };
+    assert_eq!(text, format!("{PROBE_NAMESPACE}|{PROBE_TOOL}"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn dispatch_keeps_the_emitted_identity_for_unknown_namespaces() -> anyhow::Result<()> {
+    // The alias must not turn an unrelated unknown tool into a successful call.
+    let (session, turn) = make_session_and_context().await;
+    let turn = Arc::new(turn);
+    let step_context = StepContext::for_test(Arc::clone(&turn));
+    let probe = Arc::new(NamespaceAliasProbeHandler) as Arc<dyn CoreToolRuntime>;
+    let router = test_tool_router(
+        step_context.as_ref(),
+        vec![RegisteredTool {
+            exposure: probe.exposure(),
+            runtime: Arc::clone(&probe),
+        }],
+        Vec::new(),
+        &turn.dynamic_tools,
+    );
+
+    let call = ToolCall {
+        tool_name: ToolName::namespaced("mcp__probe_namespace", "unknown_tool"),
+        call_id: "call-unknown-probe".to_string(),
+        payload: ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+        encrypted_function_args: None,
+    };
+    let dispatch = router
+        .dispatch_tool_call_with_code_mode_result(
+            Arc::new(session),
+            step_context,
+            CancellationToken::new(),
+            Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+            call,
+            ToolCallSource::Direct,
+        )
+        .await;
+    let Err(err) = dispatch else {
+        panic!("unknown tool must stay unsupported");
+    };
+    assert!(
+        err.to_string()
+            .contains("unsupported call: mcp__probe_namespaceunknown_tool"),
+        "unexpected error: {err}"
+    );
 
     Ok(())
 }

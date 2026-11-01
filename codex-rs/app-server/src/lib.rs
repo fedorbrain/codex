@@ -147,6 +147,7 @@ mod skills_watcher;
 mod startup_warnings;
 mod thread_sample;
 mod thread_state;
+mod thread_title;
 mod thread_status;
 mod transport;
 mod turn_admission;

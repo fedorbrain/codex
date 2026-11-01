@@ -44,6 +44,27 @@ const EXPOSURE_DEFERRED_MODEL_ONLY: &str = "deferred_model_only";
 const EXPOSURE_CODE_MODE_ONLY: &str = "code_mode_only";
 const EXPOSURE_HIDDEN: &str = "hidden";
 
+/// Legacy model-visible prefix for MCP tool namespaces.
+const LEGACY_MCP_NAMESPACE_PREFIX: &str = "mcp__";
+
+/// Returns the registered identity for a model-emitted namespace that carries the
+/// legacy `mcp__` prefix on a built-in namespace, such as
+/// `mcp__multi_agent_v1.spawn_agent` for the tool registered as `multi_agent_v1.spawn_agent`.
+/// Returns `None` when there is nothing to strip so the emitted identity stays in force.
+fn legacy_mcp_namespace_alias(tool_name: &ToolName) -> Option<ToolName> {
+    let namespace = tool_name
+        .namespace
+        .as_deref()?
+        .strip_prefix(LEGACY_MCP_NAMESPACE_PREFIX)?;
+    if namespace.is_empty() {
+        return None;
+    }
+    Some(ToolName::namespaced(
+        namespace.to_string(),
+        tool_name.name.clone(),
+    ))
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolCall {
     pub tool_name: ToolName,
@@ -264,7 +285,21 @@ impl ToolRouter {
                 call_id,
                 ..
             } => {
-                let tool_name = ToolName::new(namespace, name).with_default_namespace();
+                // When the wire does not carry an explicit namespace, a namespaced tool
+                // may arrive as a flat dotted name (e.g. "multi_agent_v1.spawn_agent").
+                // Split it at the first dot into (namespace, name) so the registry lookup
+                // matches the handler key registered under ToolName::namespaced.
+                let (ns, tool) = match namespace {
+                    Some(ref n) if !n.is_empty() => (Some(n.clone()), name),
+                    _ => match name.split_once('.') {
+                        Some((n, t)) if !n.is_empty() && !t.is_empty() => (
+                            Some(n.to_string()),
+                            t.to_string(),
+                        ),
+                        _ => (namespace, name),
+                    },
+                };
+                let tool_name = ToolName::new(ns, tool).with_default_namespace();
                 Ok(Some(ToolCall {
                     tool_name,
                     call_id,
@@ -372,6 +407,17 @@ impl ToolRouter {
             payload,
             ..
         } = call;
+
+        // A model can address a built-in tool as if its namespace were an MCP server and emit
+        // `mcp__<namespace>.<name>`. Resolve that alias before dispatch so handlers, hooks, and
+        // telemetry observe the identity the tool is registered under.
+        let tool_name = if self.tool_runtime(&tool_name).is_some() {
+            tool_name
+        } else {
+            legacy_mcp_namespace_alias(&tool_name)
+                .filter(|alias| self.tool_runtime(alias).is_some())
+                .unwrap_or(tool_name)
+        };
 
         // Keep the legacy ToolInvocation.turn field tied to the same request state until handlers migrate.
         let turn = Arc::clone(&step_context.turn);
