@@ -325,6 +325,8 @@ fn build_tool_call_splits_flat_dotted_name_when_namespace_is_absent() -> anyhow:
         arguments: "{}".to_string(),
         encrypted_function_args: None,
         call_id: "call-flat-dotted".to_string(),
+        encrypted_content: None,
+        status: None,
         internal_chat_message_metadata_passthrough: None,
     })?
     .expect("function_call should produce a tool call");
@@ -348,6 +350,8 @@ fn build_tool_call_splits_flat_dotted_name_when_namespace_is_absent() -> anyhow:
         arguments: "{}".to_string(),
         encrypted_function_args: None,
         call_id: "call-plain".to_string(),
+        encrypted_content: None,
+        status: None,
         internal_chat_message_metadata_passthrough: None,
     })?
     .expect("function_call should produce a tool call");
@@ -365,6 +369,8 @@ fn build_tool_call_splits_flat_dotted_name_when_namespace_is_absent() -> anyhow:
         arguments: "{}".to_string(),
         encrypted_function_args: None,
         call_id: "call-explicit".to_string(),
+        encrypted_content: None,
+        status: None,
         internal_chat_message_metadata_passthrough: None,
     })?
     .expect("function_call should produce a tool call");
@@ -770,9 +776,10 @@ async fn dispatch_resolves_legacy_mcp_prefixed_builtin_namespace() -> anyhow::Re
         vec![RegisteredTool {
             exposure: probe.exposure(),
             runtime: Arc::clone(&probe),
+            model_spec: None,
         }],
         Vec::new(),
-        &turn.dynamic_tools,
+        session.dynamic_tools().await.as_ref(),
     );
 
     assert_eq!(
@@ -781,7 +788,7 @@ async fn dispatch_resolves_legacy_mcp_prefixed_builtin_namespace() -> anyhow::Re
                 "mcp__probe_namespace",
                 "probe_tool"
             ))
-            .map(|runtime| runtime.tool_name()),
+            .map(|tool| tool.runtime.tool_name()),
         None,
         "the model-emitted identity must not resolve on its own"
     );
@@ -793,6 +800,8 @@ async fn dispatch_resolves_legacy_mcp_prefixed_builtin_namespace() -> anyhow::Re
         arguments: "{}".to_string(),
         encrypted_function_args: None,
         call_id: "call-mcp-prefixed-probe".to_string(),
+        encrypted_content: None,
+        status: None,
         internal_chat_message_metadata_passthrough: None,
     })?
     .expect("function_call should produce a tool call");
@@ -837,9 +846,10 @@ async fn dispatch_keeps_the_emitted_identity_for_unknown_namespaces() -> anyhow:
         vec![RegisteredTool {
             exposure: probe.exposure(),
             runtime: Arc::clone(&probe),
+            model_spec: None,
         }],
         Vec::new(),
-        &turn.dynamic_tools,
+        session.dynamic_tools().await.as_ref(),
     );
 
     let call = ToolCall {
