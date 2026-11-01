@@ -777,7 +777,7 @@ async fn dispatch_resolves_legacy_mcp_prefixed_builtin_namespace() -> anyhow::Re
 
     assert_eq!(
         router
-            .tool_runtime(&ToolName::namespaced(
+            .registered_tool(&ToolName::namespaced(
                 "mcp__probe_namespace",
                 "probe_tool"
             ))

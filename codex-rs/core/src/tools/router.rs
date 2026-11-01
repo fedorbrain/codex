@@ -411,11 +411,11 @@ impl ToolRouter {
         // A model can address a built-in tool as if its namespace were an MCP server and emit
         // `mcp__<namespace>.<name>`. Resolve that alias before dispatch so handlers, hooks, and
         // telemetry observe the identity the tool is registered under.
-        let tool_name = if self.tool_runtime(&tool_name).is_some() {
+        let tool_name = if self.registered_tool(&tool_name).is_some() {
             tool_name
         } else {
             legacy_mcp_namespace_alias(&tool_name)
-                .filter(|alias| self.tool_runtime(alias).is_some())
+                .filter(|alias| self.registered_tool(alias).is_some())
                 .unwrap_or(tool_name)
         };
 
